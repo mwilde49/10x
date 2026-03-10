@@ -1,0 +1,143 @@
+HPC Repo Integration Steps for 10x Pipeline Support
+====================================================
+
+Prerequisites:
+- The 10x repo is live at https://github.com/mwilde49/10x (tagged v1.0.0)
+- All HPC integration files are staged in the 10x repo under hpc_updates/
+- The hpc_updates/ directory mirrors the HPC repo's directory structure exactly
+
+Overview of Changes:
+- 7 modified files (replacements for existing HPC repo files)
+- 3 new SLURM templates
+- 3 new config templates
+- 1 new git submodule
+
+All changes have been risk-hardened:
+- PIPELINE_CONTAINERS map is unchanged (only addone/bulkrnaseq/psoma)
+- is_known_pipeline() preserves original PIPELINE_CONTAINERS check via OR
+- get_container_path() body is identical to current production
+- tjp-setup uses explicit per-pipeline blocks (no generic loop refactor)
+- manifest.json schema is stable (same field names for all pipelines)
+- manifest.sh has no dependency on common.sh functions
+- 10x submodule is not sourced by any shared infrastructure file
+
+================================================================================
+STEP 1: Add the 10x submodule
+================================================================================
+
+git submodule add https://github.com/mwilde49/10x containers/10x
+cd containers/10x && git checkout v1.0.0 && cd ../..
+git add containers/10x .gitmodules
+
+================================================================================
+STEP 2: Copy modified shared infrastructure files from the 10x repo
+================================================================================
+
+These are drop-in replacements. Each preserves existing pipeline behavior
+and adds 10x support via additive changes only.
+
+cp containers/10x/hpc_updates/bin/lib/common.sh     bin/lib/common.sh
+cp containers/10x/hpc_updates/bin/lib/validate.sh   bin/lib/validate.sh
+cp containers/10x/hpc_updates/bin/lib/manifest.sh   bin/lib/manifest.sh
+cp containers/10x/hpc_updates/bin/tjp-launch         bin/tjp-launch
+cp containers/10x/hpc_updates/bin/tjp-setup          bin/tjp-setup
+cp containers/10x/hpc_updates/bin/tjp-test           bin/tjp-test
+cp containers/10x/hpc_updates/bin/tjp-test-validate  bin/tjp-test-validate
+
+================================================================================
+STEP 3: Copy new SLURM templates
+================================================================================
+
+cp containers/10x/hpc_updates/slurm_templates/cellranger_slurm_template.sh    slurm_templates/
+cp containers/10x/hpc_updates/slurm_templates/spaceranger_slurm_template.sh   slurm_templates/
+cp containers/10x/hpc_updates/slurm_templates/xeniumranger_slurm_template.sh  slurm_templates/
+
+================================================================================
+STEP 4: Copy new config templates
+================================================================================
+
+mkdir -p templates/cellranger templates/spaceranger templates/xeniumranger
+cp containers/10x/hpc_updates/templates/cellranger/config.yaml    templates/cellranger/
+cp containers/10x/hpc_updates/templates/spaceranger/config.yaml   templates/spaceranger/
+cp containers/10x/hpc_updates/templates/xeniumranger/config.yaml  templates/xeniumranger/
+
+================================================================================
+STEP 5: Create test data directories for 10x pipelines
+================================================================================
+
+mkdir -p test_data/10x/cellranger/fastq
+mkdir -p test_data/10x/spaceranger/fastq
+mkdir -p test_data/10x/xeniumranger/xenium_bundle
+
+Note: Actual test data must be staged on HPC separately (too large for git).
+
+================================================================================
+STEP 6: Update documentation
+================================================================================
+
+Update these files to reflect the new pipelines:
+- README.md — add cellranger/spaceranger/xeniumranger to the Pipelines table
+- ONBOARDING.md — add 10x quick-start section
+- USER_GUIDE.md — add 10x usage instructions
+- CLAUDE.md — add 10x pipeline section with key differences (native, no container)
+- TJP_HPC_COMPLETE_GUIDE.md — add 10x deployment and troubleshooting
+
+================================================================================
+STEP 7: Commit and push
+================================================================================
+
+git add bin/lib/common.sh bin/lib/validate.sh bin/lib/manifest.sh
+git add bin/tjp-launch bin/tjp-setup bin/tjp-test bin/tjp-test-validate
+git add slurm_templates/cellranger_slurm_template.sh
+git add slurm_templates/spaceranger_slurm_template.sh
+git add slurm_templates/xeniumranger_slurm_template.sh
+git add templates/cellranger/ templates/spaceranger/ templates/xeniumranger/
+git add test_data/10x/
+git commit -m "Add 10x pipeline support (Cell Ranger, Space Ranger, Xenium Ranger)"
+git push origin master
+
+================================================================================
+STEP 8: On HPC — install 10x tools and stage references
+================================================================================
+
+On Juno HPC:
+
+a) Extract 10x tool tarballs to /groups/tprice/software/:
+   - /groups/tprice/software/cellranger/
+   - /groups/tprice/software/spaceranger/
+   - /groups/tprice/software/xeniumranger/
+
+b) Build Cell Ranger reference (one-time):
+   cellranger mkref \
+     --genome=GRCh38 \
+     --fasta=/path/to/GRCh38.primary_assembly.genome.fa \
+     --genes=/path/to/gencode.v48.primary_assembly.annotation.gtf
+   Move output to /groups/tprice/pipelines/references/cellranger/refdata-gex-GRCh38-2024-A
+
+c) Pull updated HPC repo:
+   cd /groups/tprice/pipelines
+   git pull origin master
+   git submodule update --init --recursive
+
+d) Run smoke tests:
+   bash containers/10x/test/test_cellranger.sh /groups/tprice/software/cellranger
+   bash containers/10x/test/test_spaceranger.sh /groups/tprice/software/spaceranger
+   bash containers/10x/test/test_xeniumranger.sh /groups/tprice/software/xeniumranger
+
+e) Run setup and launch test:
+   tjp-setup
+   tjp-test cellranger
+   tjp-test-validate cellranger
+
+================================================================================
+VERIFICATION: Confirm existing pipelines are unaffected
+================================================================================
+
+After applying all changes, verify existing pipelines still work:
+
+   tjp-test psoma
+   tjp-test-validate psoma
+   tjp-test bulkrnaseq
+   tjp-test-validate bulkrnaseq
+
+This confirms the risk isolation holds in practice.
