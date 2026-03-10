@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# tjp-test-validate — validate outputs from a tjp-test smoke test run
+# Checks that expected output directories and key files exist.
+#
+# Usage: tjp-test-validate <pipeline> [--run <timestamp>]
+#
+# If --run is not given, uses the most recent run directory.
+
+set -euo pipefail
+
+# Source shared libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+
+SUPPORTED_PIPELINES=(psoma bulkrnaseq cellranger spaceranger xeniumranger)
+
+# ── Usage ────────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+Usage: tjp-test-validate <pipeline> [--run <timestamp>]
+
+Validate outputs from a smoke test run.
+
+Pipelines: ${SUPPORTED_PIPELINES[*]}
+
+Options:
+  --run <timestamp>   Validate a specific run (default: most recent)
+  --help              Show this help message
+EOF
+    exit "${1:-0}"
+}
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+PIPELINE=""
+RUN_TS=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --run)
+            [[ $# -lt 2 ]] && die "--run requires a timestamp argument"
+            RUN_TS="$2"; shift 2 ;;
+        --help|-h) usage 0 ;;
+        -*)       die "Unknown option: $1" ;;
+        *)
+            if [[ -z "$PIPELINE" ]]; then
+                PIPELINE="$1"
+            else
+                die "Unexpected argument: $1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+[[ -z "$PIPELINE" ]] && usage 1
+
+is_supported=false
+for p in "${SUPPORTED_PIPELINES[@]}"; do
+    [[ "$p" == "$PIPELINE" ]] && is_supported=true
+done
+$is_supported || die "Unsupported pipeline: $PIPELINE (supported: ${SUPPORTED_PIPELINES[*]})"
+
+# ── Find the run directory ───────────────────────────────────────────────────
+SCRATCH_RUNS="$SCRATCH_ROOT/pipelines/$PIPELINE/runs"
+
+if [[ -n "$RUN_TS" ]]; then
+    RUN_DIR="$SCRATCH_RUNS/$RUN_TS"
+    if [[ ! -d "$RUN_DIR" ]]; then
+        die "Run directory not found: $RUN_DIR"
+    fi
+else
+    if [[ ! -d "$SCRATCH_RUNS" ]]; then
+        die "No runs directory found: $SCRATCH_RUNS"
+    fi
+    # Find most recent run (directory names are timestamps, sort works)
+    RUN_DIR=$(find "$SCRATCH_RUNS" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
+    if [[ -z "$RUN_DIR" ]]; then
+        die "No runs found in $SCRATCH_RUNS"
+    fi
+    RUN_TS=$(basename "$RUN_DIR")
+fi
+
+hyperion_banner "VALIDATION"
+info "Run: $RUN_TS"
+info "Output dir: $RUN_DIR"
+echo ""
+
+# ── Define expected outputs ──────────────────────────────────────────────────
+declare -a CHECK_DIRS
+declare -a CHECK_FILES
+
+case "$PIPELINE" in
+    psoma)
+        CHECK_DIRS=(
+            "2_trim_output"
+            "3_hisat2_mapping_output"
+            "4_filter_output"
+            "5_stringtie_counts_output"
+            "6_raw_counts_output"
+        )
+        CHECK_FILES=(
+            "3_hisat2_mapping_output/*.sorted.bam"
+            "4_filter_output/*.filt.bam"
+            "5_stringtie_counts_output/genes.tpm.txt"
+            "6_raw_counts_output/raw_htseq_counts.csv"
+        )
+        ;;
+
+    bulkrnaseq)
+        CHECK_DIRS=(
+            "2_star_mapping_output"
+            "3_filter_output"
+            "4_stringtie_counts_output"
+            "5_raw_counts_output"
+        )
+        CHECK_FILES=(
+            "2_star_mapping_output/*Aligned.sortedByCoord.out.bam"
+            "3_filter_output/*.filt.bam"
+            "4_stringtie_counts_output/genes.tpm.txt"
+            "5_raw_counts_output/raw_htseq_counts.csv"
+        )
+        ;;
+
+    cellranger)
+        # Cell Ranger outputs: <scratch>/<sample_id>/outs/
+        # Find the sample subdirectory
+        SAMPLE_DIR=""
+        shopt -s nullglob
+        sample_dirs=("$RUN_DIR"/*/outs)
+        shopt -u nullglob
+        if [[ ${#sample_dirs[@]} -gt 0 ]]; then
+            SAMPLE_DIR=$(dirname "${sample_dirs[0]}")
+            SAMPLE_NAME=$(basename "$SAMPLE_DIR")
+            info "Found Cell Ranger sample: $SAMPLE_NAME"
+            RUN_DIR="$SAMPLE_DIR"
+        fi
+
+        CHECK_DIRS=(
+            "outs"
+            "outs/filtered_feature_bc_matrix"
+            "outs/raw_feature_bc_matrix"
+        )
+        CHECK_FILES=(
+            "outs/filtered_feature_bc_matrix/barcodes.tsv.gz"
+            "outs/filtered_feature_bc_matrix/features.tsv.gz"
+            "outs/filtered_feature_bc_matrix/matrix.mtx.gz"
+            "outs/web_summary.html"
+            "outs/metrics_summary.csv"
+        )
+        ;;
+
+    spaceranger)
+        # Space Ranger outputs: <scratch>/<sample_id>/outs/
+        SAMPLE_DIR=""
+        shopt -s nullglob
+        sample_dirs=("$RUN_DIR"/*/outs)
+        shopt -u nullglob
+        if [[ ${#sample_dirs[@]} -gt 0 ]]; then
+            SAMPLE_DIR=$(dirname "${sample_dirs[0]}")
+            SAMPLE_NAME=$(basename "$SAMPLE_DIR")
+            info "Found Space Ranger sample: $SAMPLE_NAME"
+            RUN_DIR="$SAMPLE_DIR"
+        fi
+
+        CHECK_DIRS=(
+            "outs"
+            "outs/filtered_feature_bc_matrix"
+            "outs/raw_feature_bc_matrix"
+            "outs/spatial"
+        )
+        CHECK_FILES=(
+            "outs/filtered_feature_bc_matrix/barcodes.tsv.gz"
+            "outs/filtered_feature_bc_matrix/features.tsv.gz"
+            "outs/filtered_feature_bc_matrix/matrix.mtx.gz"
+            "outs/spatial/tissue_positions.csv"
+            "outs/web_summary.html"
+            "outs/metrics_summary.csv"
+        )
+        ;;
+
+    xeniumranger)
+        # Xenium Ranger outputs: <scratch>/<sample_id>/outs/
+        SAMPLE_DIR=""
+        shopt -s nullglob
+        sample_dirs=("$RUN_DIR"/*/outs)
+        shopt -u nullglob
+        if [[ ${#sample_dirs[@]} -gt 0 ]]; then
+            SAMPLE_DIR=$(dirname "${sample_dirs[0]}")
+            SAMPLE_NAME=$(basename "$SAMPLE_DIR")
+            info "Found Xenium Ranger sample: $SAMPLE_NAME"
+            RUN_DIR="$SAMPLE_DIR"
+        fi
+
+        CHECK_DIRS=(
+            "outs"
+        )
+        CHECK_FILES=(
+            "outs/cells.csv.gz"
+            "outs/cell_feature_matrix"
+            "outs/metrics_summary.csv"
+        )
+        ;;
+esac
+
+# ── Check directories ────────────────────────────────────────────────────────
+PASS=0
+FAIL=0
+
+for dir in "${CHECK_DIRS[@]}"; do
+    full_path="$RUN_DIR/$dir"
+    if [[ -d "$full_path" ]]; then
+        # Count files in directory
+        file_count=$(find "$full_path" -type f | wc -l)
+        printf "  ${_GREEN}PASS${_RESET}  %-40s (%d files)\n" "$dir/" "$file_count"
+        PASS=$((PASS + 1))
+    else
+        printf "  ${_RED}FAIL${_RESET}  %-40s (directory missing)\n" "$dir/"
+        FAIL=$((FAIL + 1))
+    fi
+done
+
+echo ""
+
+# ── Check key files ──────────────────────────────────────────────────────────
+for pattern in "${CHECK_FILES[@]}"; do
+    shopt -s nullglob
+    matches=("$RUN_DIR"/$pattern)
+    shopt -u nullglob
+
+    if [[ ${#matches[@]} -gt 0 ]]; then
+        for f in "${matches[@]}"; do
+            size=$(du -h "$f" | cut -f1)
+            rel_path="${f#$RUN_DIR/}"
+            printf "  ${_GREEN}PASS${_RESET}  %-40s (%s)\n" "$rel_path" "$size"
+        done
+        PASS=$((PASS + 1))
+    else
+        printf "  ${_RED}FAIL${_RESET}  %-40s (no matches)\n" "$pattern"
+        FAIL=$((FAIL + 1))
+    fi
+done
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+echo ""
+TOTAL=$((PASS + FAIL))
+if [[ $FAIL -eq 0 ]]; then
+    hyperion_milestone "Mission Complete — All $TOTAL checks passed"
+    hyperion_sign_off
+    exit 0
+else
+    hyperion_milestone "Mission Incomplete — $FAIL/$TOTAL checks failed"
+    exit 1
+fi

@@ -1,0 +1,28 @@
+# Xenium Ranger Pipeline Configuration
+# Edit the paths below, then launch with: tjp-launch xeniumranger
+# See ONBOARDING.md for detailed field descriptions.
+#
+# Supported commands:
+#   resegment            — re-segment cells from a Xenium output bundle
+#   import-segmentation  — import external segmentation masks
+
+sample_id: my_xenium_sample
+command: resegment               # resegment or import-segmentation
+
+# Input Xenium output bundle (from Xenium instrument)
+xenium_bundle: __SCRATCH__/myproject/xenium_output
+
+# Resource allocation (should match SLURM --cpus-per-task and --mem)
+localcores: 16
+localmem: 120                    # GB, leave ~8G headroom below SLURM --mem
+
+# Tool path (pre-installed on HPC)
+tool_path: /groups/tprice/software/xeniumranger
+
+# Optional parameters for resegment (uncomment to use)
+# expansion_distance: 5          # Cell expansion distance in microns
+# panel_file: /path/to/panel.csv # Custom gene panel file
+
+# Required for import-segmentation (uncomment if command: import-segmentation)
+# segmentation_file: __SCRATCH__/myproject/segmentation.csv
+# viz_labels: /path/to/labels.csv  # Optional visualization labels

@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# tjp-launch — launch a TJP pipeline with automatic run tracking
+# Creates a timestamped run directory, snapshots config, generates
+# reproducibility manifest, and submits the SLURM job.
+#
+# Usage: tjp-launch <pipeline> [--config <path>]
+#
+# Examples:
+#   tjp-launch addone
+#   tjp-launch bulkrnaseq
+#   tjp-launch cellranger
+#   tjp-launch addone --config /path/to/custom_config.yaml
+
+set -euo pipefail
+
+# Source shared libraries
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/common.sh"
+source "$SCRIPT_DIR/lib/validate.sh"
+source "$SCRIPT_DIR/lib/manifest.sh"
+
+# ── Helper functions ─────────────────────────────────────────────────────────
+
+usage() {
+    cat <<EOF
+Usage: tjp-launch <pipeline> [--config <path>] [--dev]
+
+Pipelines: ${KNOWN_PIPELINES[*]}
+
+Options:
+  --config <path>   Path to config YAML (default: $USER_PIPELINES/<pipeline>/config.yaml)
+  --dev             Submit to dev partition (2-hour limit, for quick testing)
+  --help            Show this help message
+EOF
+    exit "${1:-0}"
+}
+
+# _generate_nextflow_config <yaml_config> <output_path> <scratch_output_dir>
+# Converts simplified user YAML into Nextflow pipeline.config using sed template.
+_generate_nextflow_config() {
+    local yaml_config="$1"
+    local output="$2"
+    local scratch_output_dir="$3"
+    local template="$REPO_ROOT/templates/bulkrnaseq/pipeline.config.tmpl"
+
+    if [[ ! -f "$template" ]]; then
+        die "Nextflow config template not found: $template"
+    fi
+
+    # Read values from YAML
+    local project_name species paired_end fastq_dir samples_file
+    local star_index reference_gtf read1_suffix read2_suffix
+    local run_fastqc run_rna_pipeline
+    local clip5_num clip3_num strand_st strand_hts paired_hts fastqc_cores
+
+    project_name=$(yaml_get "$yaml_config" "project_name")
+    species=$(yaml_get "$yaml_config" "species")
+    paired_end=$(yaml_get "$yaml_config" "paired_end")
+    fastq_dir=$(yaml_get "$yaml_config" "fastq_dir")
+    samples_file=$(yaml_get "$yaml_config" "samples_file")
+    star_index=$(yaml_get "$yaml_config" "star_index")
+    reference_gtf=$(yaml_get "$yaml_config" "reference_gtf")
+    read1_suffix=$(yaml_get "$yaml_config" "read1_suffix" 2>/dev/null || echo "_R1_001")
+    read2_suffix=$(yaml_get "$yaml_config" "read2_suffix" 2>/dev/null || echo "_R2_001")
+    clip5_num=$(yaml_get "$yaml_config" "clip5_num" 2>/dev/null || echo "11")
+    clip3_num=$(yaml_get "$yaml_config" "clip3_num" 2>/dev/null || echo "5")
+    strand_st=$(yaml_get "$yaml_config" "strand_st" 2>/dev/null || echo "--rf")
+    strand_hts=$(yaml_get "$yaml_config" "strand_hts" 2>/dev/null || echo "reverse")
+    paired_hts=$(yaml_get "$yaml_config" "paired_hts" 2>/dev/null || echo "pos")
+    fastqc_cores=$(yaml_get "$yaml_config" "fastqc_cores" 2>/dev/null || echo "40")
+    run_fastqc=$(yaml_get "$yaml_config" "run_fastqc")
+    run_rna_pipeline=$(yaml_get "$yaml_config" "run_rna_pipeline")
+
+    # BED file paths (empty string if not set)
+    local exclude_bed="" blacklist_bed=""
+    if yaml_has "$yaml_config" "exclude_bed_file_path"; then
+        exclude_bed=$(yaml_get "$yaml_config" "exclude_bed_file_path") || true
+    fi
+    if yaml_has "$yaml_config" "blacklist_bed_file_path"; then
+        blacklist_bed=$(yaml_get "$yaml_config" "blacklist_bed_file_path") || true
+    fi
+
+    # config_directory points to scratch output dir (UTDal scripts symlinked there)
+    local config_directory="$scratch_output_dir"
+
+    # Perform sed substitution on template
+    sed \
+        -e "s|@@PROJECT_NAME@@|${project_name}|g" \
+        -e "s|@@SPECIES@@|${species}|g" \
+        -e "s|@@PAIRED_END@@|${paired_end}|g" \
+        -e "s|@@CONFIG_DIRECTORY@@|${config_directory}|g" \
+        -e "s|@@FASTQ_DIR@@|${fastq_dir}|g" \
+        -e "s|@@SAMPLES_FILE@@|${samples_file}|g" \
+        -e "s|@@STAR_INDEX@@|${star_index}|g" \
+        -e "s|@@REFERENCE_GTF@@|${reference_gtf}|g" \
+        -e "s|@@READ1_SUFFIX@@|${read1_suffix}|g" \
+        -e "s|@@READ2_SUFFIX@@|${read2_suffix}|g" \
+        -e "s|@@CLIP5_NUM@@|${clip5_num}|g" \
+        -e "s|@@CLIP3_NUM@@|${clip3_num}|g" \
+        -e "s|@@STRAND_ST@@|${strand_st}|g" \
+        -e "s|@@STRAND_HTS@@|${strand_hts}|g" \
+        -e "s|@@PAIRED_HTS@@|${paired_hts}|g" \
+        -e "s|@@FASTQC_CORES@@|${fastqc_cores}|g" \
+        -e "s|@@EXCLUDE_BED@@|${exclude_bed}|g" \
+        -e "s|@@BLACKLIST_BED@@|${blacklist_bed}|g" \
+        -e "s|@@RUN_FASTQC@@|${run_fastqc}|g" \
+        -e "s|@@RUN_RNA_PIPELINE@@|${run_rna_pipeline}|g" \
+        "$template" > "$output"
+
+    info "Generated: $output"
+}
+
+# _generate_psoma_config <yaml_config> <output_path> <scratch_output_dir>
+# Converts simplified user YAML into Nextflow pipeline.config using sed template.
+_generate_psoma_config() {
+    local yaml_config="$1"
+    local output="$2"
+    local scratch_output_dir="$3"
+    local template="$REPO_ROOT/templates/psoma/pipeline.config.tmpl"
+
+    if [[ ! -f "$template" ]]; then
+        die "Psoma Nextflow config template not found: $template"
+    fi
+
+    # Read values from YAML
+    local project_name species paired_end fastq_dir samples_file
+    local hisat2_index reference_gtf read1_suffix read2_suffix
+    local run_fastqc run_rna_pipeline
+    local headcrop leading trailing slidingwindow minlen illuminaclip_params
+    local strand_st strand_hts paired_hts fastqc_cores
+
+    project_name=$(yaml_get "$yaml_config" "project_name")
+    species=$(yaml_get "$yaml_config" "species")
+    paired_end=$(yaml_get "$yaml_config" "paired_end")
+    fastq_dir=$(yaml_get "$yaml_config" "fastq_dir")
+    samples_file=$(yaml_get "$yaml_config" "samples_file")
+    hisat2_index=$(yaml_get "$yaml_config" "hisat2_index")
+    reference_gtf=$(yaml_get "$yaml_config" "reference_gtf")
+    read1_suffix=$(yaml_get "$yaml_config" "read1_suffix" 2>/dev/null || echo "_1")
+    read2_suffix=$(yaml_get "$yaml_config" "read2_suffix" 2>/dev/null || echo "_2")
+    headcrop=$(yaml_get "$yaml_config" "headcrop" 2>/dev/null || echo "10")
+    leading=$(yaml_get "$yaml_config" "leading" 2>/dev/null || echo "3")
+    trailing=$(yaml_get "$yaml_config" "trailing" 2>/dev/null || echo "3")
+    slidingwindow=$(yaml_get "$yaml_config" "slidingwindow" 2>/dev/null || echo "4:15")
+    minlen=$(yaml_get "$yaml_config" "minlen" 2>/dev/null || echo "36")
+    illuminaclip_params=$(yaml_get "$yaml_config" "illuminaclip_params" 2>/dev/null || echo "2:30:10:5:true")
+    strand_st=$(yaml_get "$yaml_config" "strand_st" 2>/dev/null || echo "--rf")
+    strand_hts=$(yaml_get "$yaml_config" "strand_hts" 2>/dev/null || echo "reverse")
+    paired_hts=$(yaml_get "$yaml_config" "paired_hts" 2>/dev/null || echo "pos")
+    fastqc_cores=$(yaml_get "$yaml_config" "fastqc_cores" 2>/dev/null || echo "40")
+    run_fastqc=$(yaml_get "$yaml_config" "run_fastqc")
+    run_rna_pipeline=$(yaml_get "$yaml_config" "run_rna_pipeline")
+
+    # BED file paths (empty string if not set)
+    local exclude_bed="" blacklist_bed=""
+    if yaml_has "$yaml_config" "exclude_bed_file_path"; then
+        exclude_bed=$(yaml_get "$yaml_config" "exclude_bed_file_path") || true
+    fi
+    if yaml_has "$yaml_config" "blacklist_bed_file_path"; then
+        blacklist_bed=$(yaml_get "$yaml_config" "blacklist_bed_file_path") || true
+    fi
+
+    # config_directory and illumina_clip_file are auto-set (not user-editable)
+    local config_directory="$REPO_ROOT/containers/psoma"
+    local illumina_clip_file="$REPO_ROOT/containers/psoma/NexteraPE-PE.fa"
+    local output_directory="$scratch_output_dir"
+
+    # Perform sed substitution on template
+    sed \
+        -e "s|@@PROJECT_NAME@@|${project_name}|g" \
+        -e "s|@@SPECIES@@|${species}|g" \
+        -e "s|@@PAIRED_END@@|${paired_end}|g" \
+        -e "s|@@CONFIG_DIRECTORY@@|${config_directory}|g" \
+        -e "s|@@OUTPUT_DIRECTORY@@|${output_directory}|g" \
+        -e "s|@@FASTQ_DIR@@|${fastq_dir}|g" \
+        -e "s|@@SAMPLES_FILE@@|${samples_file}|g" \
+        -e "s|@@HISAT2_INDEX@@|${hisat2_index}|g" \
+        -e "s|@@REFERENCE_GTF@@|${reference_gtf}|g" \
+        -e "s|@@READ1_SUFFIX@@|${read1_suffix}|g" \
+        -e "s|@@READ2_SUFFIX@@|${read2_suffix}|g" \
+        -e "s|@@ILLUMINA_CLIP_FILE@@|${illumina_clip_file}|g" \
+        -e "s|@@HEADCROP@@|${headcrop}|g" \
+        -e "s|@@LEADING@@|${leading}|g" \
+        -e "s|@@TRAILING@@|${trailing}|g" \
+        -e "s|@@SLIDINGWINDOW@@|${slidingwindow}|g" \
+        -e "s|@@MINLEN@@|${minlen}|g" \
+        -e "s|@@ILLUMINACLIP_PARAMS@@|${illuminaclip_params}|g" \
+        -e "s|@@EXCLUDE_BED@@|${exclude_bed}|g" \
+        -e "s|@@BLACKLIST_BED@@|${blacklist_bed}|g" \
+        -e "s|@@STRAND_ST@@|${strand_st}|g" \
+        -e "s|@@STRAND_HTS@@|${strand_hts}|g" \
+        -e "s|@@PAIRED_HTS@@|${paired_hts}|g" \
+        -e "s|@@FASTQC_CORES@@|${fastqc_cores}|g" \
+        -e "s|@@RUN_FASTQC@@|${run_fastqc}|g" \
+        -e "s|@@RUN_RNA_PIPELINE@@|${run_rna_pipeline}|g" \
+        "$template" > "$output"
+
+    info "Generated: $output"
+}
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+PIPELINE=""
+CONFIG_PATH=""
+DEV_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config)
+            [[ $# -lt 2 ]] && die "--config requires a path argument"
+            CONFIG_PATH="$2"
+            shift 2
+            ;;
+        --dev)
+            DEV_MODE=true
+            shift
+            ;;
+        --help|-h)
+            usage 0
+            ;;
+        -*)
+            die "Unknown option: $1"
+            ;;
+        *)
+            if [[ -z "$PIPELINE" ]]; then
+                PIPELINE="$1"
+            else
+                die "Unexpected argument: $1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+[[ -z "$PIPELINE" ]] && usage 1
+
+# ── Validate pipeline name ───────────────────────────────────────────────────
+if ! is_known_pipeline "$PIPELINE"; then
+    die "Unknown pipeline: $PIPELINE (known: ${KNOWN_PIPELINES[*]})"
+fi
+
+# ── Resolve config path ─────────────────────────────────────────────────────
+if [[ -z "$CONFIG_PATH" ]]; then
+    CONFIG_PATH="$USER_PIPELINES/$PIPELINE/config.yaml"
+fi
+
+if [[ ! -f "$CONFIG_PATH" ]]; then
+    die "Config file not found: $CONFIG_PATH
+  Run 'tjp-setup' first, or specify a config with --config <path>"
+fi
+
+hyperion_banner "LAUNCH"
+
+# ── Validate config ──────────────────────────────────────────────────────────
+info "Validating config: $CONFIG_PATH"
+validate_config "$PIPELINE" "$CONFIG_PATH"
+info "Config validation passed."
+
+# ── Resolve paths ────────────────────────────────────────────────────────────
+SLURM_TEMPLATE=$(get_slurm_template "$PIPELINE")
+
+if [[ ! -f "$SLURM_TEMPLATE" ]]; then
+    die "SLURM template not found: $SLURM_TEMPLATE"
+fi
+
+# Container check — only for container-based pipelines
+CONTAINER=""
+if is_container_pipeline "$PIPELINE"; then
+    CONTAINER=$(get_container_path "$PIPELINE")
+    if [[ ! -f "$CONTAINER" ]]; then
+        die "Container not found: $CONTAINER
+  Build and transfer it to HPC first."
+    fi
+else
+    # For native pipelines, record tool path for manifest
+    CONTAINER="native:$(get_tool_path "$PIPELINE")"
+fi
+
+# ── Create timestamped run directory ─────────────────────────────────────────
+TS=$(timestamp)
+RUN_DIR="$USER_PIPELINES/$PIPELINE/runs/$TS"
+mkdir -p "$RUN_DIR"
+info "Run directory: $RUN_DIR"
+
+# ── Snapshot config ──────────────────────────────────────────────────────────
+cp "$CONFIG_PATH" "$RUN_DIR/config.yaml"
+
+# ── Read input dir for stage-out ─────────────────────────────────────────────
+FASTQ_DIR=""
+if [[ "$PIPELINE" == "psoma" || "$PIPELINE" == "bulkrnaseq" || "$PIPELINE" == "cellranger" || "$PIPELINE" == "spaceranger" ]]; then
+    FASTQ_DIR=$(yaml_get "$RUN_DIR/config.yaml" "fastq_dir" 2>/dev/null || echo "")
+elif [[ "$PIPELINE" == "xeniumranger" ]]; then
+    FASTQ_DIR=$(yaml_get "$RUN_DIR/config.yaml" "xenium_bundle" 2>/dev/null || echo "")
+fi
+
+# ── Pipeline-specific dispatch ───────────────────────────────────────────────
+SBATCH_CONFIG_ARG=""
+SCRATCH_OUTPUT_DIR=""
+
+case "$PIPELINE" in
+    addone)
+        # AddOne: pass config.yaml directly as $1 to SLURM template
+        SBATCH_CONFIG_ARG="$RUN_DIR/config.yaml"
+        ;;
+    bulkrnaseq)
+        # BulkRNASeq: create scratch output dir, symlink UTDal repo files into it
+        SCRATCH_OUTPUT_DIR="$SCRATCH_ROOT/pipelines/$PIPELINE/runs/$TS"
+        mkdir -p "$SCRATCH_OUTPUT_DIR"
+        info "Scratch output dir: $SCRATCH_OUTPUT_DIR"
+
+        # Symlink UTDal pipeline files so Nextflow finds scripts via config_directory
+        utdal_repo="$REPO_ROOT/Bulk-RNA-Seq-Nextflow-Pipeline"
+        for f in "$utdal_repo"/*; do
+            [[ -e "$f" ]] && ln -sf "$f" "$SCRATCH_OUTPUT_DIR/"
+        done
+        info "Symlinked UTDal pipeline files into scratch output dir"
+
+        # Generate Nextflow pipeline.config with config_directory pointing to scratch
+        info "Generating Nextflow pipeline.config..."
+        _generate_nextflow_config "$RUN_DIR/config.yaml" "$RUN_DIR/pipeline.config" "$SCRATCH_OUTPUT_DIR"
+        SBATCH_CONFIG_ARG="$RUN_DIR/pipeline.config"
+        ;;
+    psoma)
+        # Psoma: create scratch output dir for pipeline outputs
+        SCRATCH_OUTPUT_DIR="$SCRATCH_ROOT/pipelines/$PIPELINE/runs/$TS"
+        mkdir -p "$SCRATCH_OUTPUT_DIR"
+        info "Scratch output dir: $SCRATCH_OUTPUT_DIR"
+
+        # Generate Nextflow pipeline.config with output_directory pointing to scratch
+        info "Generating Nextflow pipeline.config..."
+        _generate_psoma_config "$RUN_DIR/config.yaml" "$RUN_DIR/pipeline.config" "$SCRATCH_OUTPUT_DIR"
+        SBATCH_CONFIG_ARG="$RUN_DIR/pipeline.config"
+        ;;
+    cellranger|spaceranger|xeniumranger)
+        # 10x native pipelines: create scratch output dir, pass YAML config directly
+        SCRATCH_OUTPUT_DIR="$SCRATCH_ROOT/pipelines/$PIPELINE/runs/$TS"
+        mkdir -p "$SCRATCH_OUTPUT_DIR"
+        info "Scratch output dir: $SCRATCH_OUTPUT_DIR"
+
+        # No Nextflow config generation — wrapper scripts read YAML directly
+        SBATCH_CONFIG_ARG="$RUN_DIR/config.yaml"
+        ;;
+esac
+
+# ── Generate manifest (pre-submission) ───────────────────────────────────────
+generate_manifest "$RUN_DIR" "$PIPELINE" "$RUN_DIR/config.yaml" "$CONTAINER" "$SLURM_TEMPLATE"
+
+# ── Submit SLURM job ─────────────────────────────────────────────────────────
+SBATCH_DEV_FLAGS=()
+if [[ "$DEV_MODE" == true ]]; then
+    SBATCH_DEV_FLAGS=(--partition=dev --time=02:00:00)
+    info "Dev mode: submitting to dev partition (2-hour limit)"
+fi
+
+info "Submitting job..."
+SBATCH_OUTPUT=$(sbatch \
+    --output="$RUN_DIR/slurm_%j.out" \
+    --error="$RUN_DIR/slurm_%j.err" \
+    "${SBATCH_DEV_FLAGS[@]}" \
+    "$SLURM_TEMPLATE" \
+    "$SBATCH_CONFIG_ARG" \
+    "$RUN_DIR" \
+    "$SCRATCH_OUTPUT_DIR" \
+    "$FASTQ_DIR" \
+    2>&1)
+
+# Parse job ID from "Submitted batch job 123456"
+JOB_ID=$(echo "$SBATCH_OUTPUT" | grep -oP '\d+$' || echo "unknown")
+
+if [[ "$JOB_ID" == "unknown" ]]; then
+    error "sbatch output: $SBATCH_OUTPUT"
+    die "Failed to parse job ID from sbatch output."
+fi
+
+# ── Update manifest with job ID ─────────────────────────────────────────────
+update_manifest_job_id "$RUN_DIR" "$JOB_ID"
+
+# ── Print summary ────────────────────────────────────────────────────────────
+hyperion_milestone "Warp Drive Engaged — $PIPELINE job $JOB_ID submitted"
+
+if [[ -n "$SCRATCH_OUTPUT_DIR" ]]; then
+cat <<EOF
+  Pipeline:   $PIPELINE
+  Job ID:     $JOB_ID
+  Run dir:    $RUN_DIR/
+  Output dir: $SCRATCH_OUTPUT_DIR/
+  Archive:    Results will be copied to $RUN_DIR/{inputs,outputs}/ after completion
+  Monitor:    tail -f $RUN_DIR/slurm_${JOB_ID}.out
+  Cancel:     scancel $JOB_ID
+EOF
+else
+cat <<EOF
+  Pipeline:   $PIPELINE
+  Job ID:     $JOB_ID
+  Run dir:    $RUN_DIR/
+  Monitor:    tail -f $RUN_DIR/slurm_${JOB_ID}.out
+  Cancel:     scancel $JOB_ID
+EOF
+fi

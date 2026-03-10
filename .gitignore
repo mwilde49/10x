@@ -1,0 +1,19 @@
+# 10x tool tarballs and binaries
+*.tar.gz
+*.tar
+
+# Test outputs
+test/output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Claude
+.claude/
+extensible_orchestration_10x_guidance.txt

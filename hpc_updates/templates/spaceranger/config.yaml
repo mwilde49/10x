@@ -1,0 +1,33 @@
+# Space Ranger Visium Spatial Transcriptomics Pipeline Configuration
+# Edit the paths below, then launch with: tjp-launch spaceranger
+# See ONBOARDING.md for detailed field descriptions.
+
+sample_id: my_spatial_sample
+sample_name: my_spatial_sample   # Must match FASTQ filename prefix
+
+# Data paths (edit these for your project)
+fastq_dir: __SCRATCH__/myproject/fastq
+image: __SCRATCH__/myproject/images/tissue_image.tif
+
+# Slide and capture area
+slide: V19L29-096                # Visium slide serial number
+area: B1                         # Capture area: A1, B1, C1, or D1
+
+# Reference (pre-built Cell Ranger reference — same format as Cell Ranger)
+transcriptome: /groups/tprice/pipelines/references/cellranger/refdata-gex-GRCh38-2024-A
+
+# Resource allocation (should match SLURM --cpus-per-task and --mem)
+localcores: 16
+localmem: 120                    # GB, leave ~8G headroom below SLURM --mem
+
+# Tool path (pre-installed on HPC)
+tool_path: /groups/tprice/software/spaceranger
+
+# Optional parameters (uncomment to use)
+# cytaimage: /path/to/cyta_image.tif       # CytAssist image
+# darkimage: /path/to/dark_image.tif       # Dark background fluorescence image
+# colorizedimage: /path/to/color_image.tif # Colorized fluorescence image
+# reorient_images: true                     # Auto-reorient images to match slide
+# loupe_alignment: /path/to/alignment.json # Manual Loupe alignment file
+# no_bam: true                             # Skip BAM file generation
+# create_bam: true                         # Explicitly create BAM

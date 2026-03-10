@@ -1,0 +1,27 @@
+# Cell Ranger scRNA-seq Pipeline Configuration
+# Edit the paths below, then launch with: tjp-launch cellranger
+# See ONBOARDING.md for detailed field descriptions.
+
+sample_id: my_sample
+sample_name: my_sample           # Must match FASTQ filename prefix
+
+# Data paths (edit these for your project)
+fastq_dir: __SCRATCH__/myproject/fastq
+
+# Reference (pre-built Cell Ranger reference)
+transcriptome: /groups/tprice/pipelines/references/cellranger/refdata-gex-GRCh38-2024-A
+
+# Resource allocation (should match SLURM --cpus-per-task and --mem)
+localcores: 16
+localmem: 120                    # GB, leave ~8G headroom below SLURM --mem
+
+# Tool path (pre-installed on HPC)
+tool_path: /groups/tprice/software/cellranger
+
+# Optional parameters (uncomment to use)
+# chemistry: auto                # auto, SC3Pv3, SC3Pv2, SC5P-PE, SC5P-R2, etc.
+# expect_cells: 10000            # Expected number of recovered cells
+# force_cells: 6000              # Force exact cell count (overrides cell detection)
+# include_introns: true          # Count intronic reads (default: true for GEX)
+# no_bam: true                   # Skip BAM file generation (saves time and disk)
+# create_bam: true               # Explicitly create BAM (default behavior)
