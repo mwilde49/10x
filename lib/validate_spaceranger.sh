@@ -8,13 +8,24 @@ validate_spaceranger() {
     local config="$1"
     local errors=()
 
-    # Required keys
-    local required_keys=(sample_id sample_name fastq_dir transcriptome image slide area localcores localmem)
+    # Required keys (slide/area OR unknown_slide, validated below)
+    local required_keys=(sample_id sample_name fastq_dir transcriptome image localcores localmem)
     for key in "${required_keys[@]}"; do
         if ! yaml_has "$config" "$key"; then
             errors+=("Missing required key: $key")
         fi
     done
+
+    # Must have either (slide + area) or unknown_slide
+    local has_slide=false has_area=false has_unknown_slide=false
+    yaml_has "$config" "slide" && has_slide=true
+    yaml_has "$config" "area" && has_area=true
+    yaml_has "$config" "unknown_slide" && has_unknown_slide=true
+
+    if ! $has_unknown_slide; then
+        $has_slide || errors+=("Missing required key: slide (or use unknown_slide)")
+        $has_area || errors+=("Missing required key: area (or use unknown_slide)")
+    fi
 
     # Path existence (skip placeholders)
     local path_keys=(fastq_dir transcriptome image)

@@ -19,15 +19,16 @@ if [[ ! -f "$CONFIG" ]]; then
 fi
 
 # ── Read config ──────────────────────────────────────────────────────────────
-require_config_keys "$CONFIG" sample_id sample_name fastq_dir transcriptome image slide area localcores localmem
+require_config_keys "$CONFIG" sample_id sample_name fastq_dir transcriptome image localcores localmem
 
 sample_id=$(yaml_get "$CONFIG" "sample_id")
 sample_name=$(yaml_get "$CONFIG" "sample_name")
 fastq_dir=$(yaml_get "$CONFIG" "fastq_dir")
 transcriptome=$(yaml_get "$CONFIG" "transcriptome")
 image=$(yaml_get "$CONFIG" "image")
-slide=$(yaml_get "$CONFIG" "slide")
-area=$(yaml_get "$CONFIG" "area")
+slide=$(yaml_get "$CONFIG" "slide" 2>/dev/null || echo "")
+area=$(yaml_get "$CONFIG" "area" 2>/dev/null || echo "")
+unknown_slide=$(yaml_get "$CONFIG" "unknown_slide" 2>/dev/null || echo "")
 localcores=$(yaml_get "$CONFIG" "localcores")
 localmem=$(yaml_get "$CONFIG" "localmem")
 tool_path=$(yaml_get "$CONFIG" "tool_path" 2>/dev/null || echo "")
@@ -53,7 +54,11 @@ require_paths_exist "$CONFIG" fastq_dir transcriptome image
 info "Sample: $sample_id"
 info "FASTQs: $fastq_dir"
 info "Image: $image"
-info "Slide: $slide / Area: $area"
+if [[ -n "$unknown_slide" ]]; then
+    info "Slide: unknown ($unknown_slide)"
+else
+    info "Slide: $slide / Area: $area"
+fi
 info "Reference: $transcriptome"
 info "Resources: $localcores cores, ${localmem}GB memory"
 info "Output dir: $SCRATCH_OUTPUT_DIR"
@@ -68,11 +73,16 @@ CMD=(
     --fastqs="$fastq_dir"
     --sample="$sample_name"
     --image="$image"
-    --slide="$slide"
-    --area="$area"
     --localcores="$localcores"
     --localmem="$localmem"
 )
+
+# Slide identification: either slide+area or unknown_slide
+if [[ -n "$unknown_slide" ]]; then
+    CMD+=(--unknown-slide="$unknown_slide")
+else
+    CMD+=(--slide="$slide" --area="$area")
+fi
 
 # Append optional flags
 [[ -n "$cytaimage" ]] && CMD+=(--cytaimage="$cytaimage")

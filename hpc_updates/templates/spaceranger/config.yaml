@@ -9,9 +9,10 @@ sample_name: my_spatial_sample   # Must match FASTQ filename prefix
 fastq_dir: __SCRATCH__/myproject/fastq
 image: __SCRATCH__/myproject/images/tissue_image.tif
 
-# Slide and capture area
+# Slide identification — use EITHER (slide + area) OR unknown_slide
 slide: V19L29-096                # Visium slide serial number
 area: B1                         # Capture area: A1, B1, C1, or D1
+# unknown_slide: visium-1        # Use instead of slide+area for unknown/third-party slides
 
 # Reference (pre-built Cell Ranger reference — same format as Cell Ranger)
 transcriptome: /groups/tprice/pipelines/references/cellranger/refdata-gex-GRCh38-2024-A
