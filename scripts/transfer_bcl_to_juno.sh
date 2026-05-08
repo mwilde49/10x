@@ -11,7 +11,7 @@ read -rp "Project name (e.g. UTDGC583): " PROJECT
 read -rp "Path to BCL run folder: " SRC
 SRC="${SRC%/}"    # strip trailing slash if present
 
-JUNO_HOST="juno.utdallas.edu"
+JUNO_HOST="juno.hpcre.utdallas.edu"
 
 # Derive run folder name and destination from inputs
 RUN_FOLDER="$(basename "$SRC")"
