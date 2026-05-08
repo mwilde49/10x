@@ -288,6 +288,8 @@ cp "$CONFIG_PATH" "$RUN_DIR/config.yaml"
 FASTQ_DIR=""
 if [[ "$PIPELINE" == "psoma" || "$PIPELINE" == "bulkrnaseq" || "$PIPELINE" == "cellranger" || "$PIPELINE" == "spaceranger" ]]; then
     FASTQ_DIR=$(yaml_get "$RUN_DIR/config.yaml" "fastq_dir" 2>/dev/null || echo "")
+elif [[ "$PIPELINE" == "cellranger-mkfastq" ]]; then
+    FASTQ_DIR=$(yaml_get "$RUN_DIR/config.yaml" "run_dir" 2>/dev/null || echo "")
 elif [[ "$PIPELINE" == "xeniumranger" ]]; then
     FASTQ_DIR=$(yaml_get "$RUN_DIR/config.yaml" "xenium_bundle" 2>/dev/null || echo "")
 fi
@@ -330,7 +332,7 @@ case "$PIPELINE" in
         _generate_psoma_config "$RUN_DIR/config.yaml" "$RUN_DIR/pipeline.config" "$SCRATCH_OUTPUT_DIR"
         SBATCH_CONFIG_ARG="$RUN_DIR/pipeline.config"
         ;;
-    cellranger|spaceranger|xeniumranger)
+    cellranger|cellranger-mkfastq|spaceranger|xeniumranger)
         # 10x native pipelines: create scratch output dir, pass YAML config directly
         SCRATCH_OUTPUT_DIR="$SCRATCH_ROOT/pipelines/$PIPELINE/runs/$TS"
         mkdir -p "$SCRATCH_OUTPUT_DIR"

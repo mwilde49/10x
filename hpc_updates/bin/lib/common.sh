@@ -18,6 +18,7 @@ declare -A PIPELINE_TYPE=(
     [bulkrnaseq]="container"
     [psoma]="container"
     [cellranger]="native"
+    [cellranger-mkfastq]="native"
     [spaceranger]="native"
     [xeniumranger]="native"
 )
@@ -33,6 +34,7 @@ declare -A PIPELINE_CONTAINERS=(
 # Maps native pipeline name → default tool install path on HPC
 declare -A PIPELINE_TOOL_PATH=(
     [cellranger]="/groups/tprice/software/cellranger"
+    [cellranger-mkfastq]="/groups/tprice/software/cellranger"
     [spaceranger]="/groups/tprice/software/spaceranger"
     [xeniumranger]="/groups/tprice/software/xeniumranger"
 )
@@ -43,12 +45,13 @@ declare -A PIPELINE_TEMPLATES=(
     [bulkrnaseq]="slurm_templates/bulkrnaseq_slurm_template.sh"
     [psoma]="slurm_templates/psoma_slurm_template.sh"
     [cellranger]="slurm_templates/cellranger_slurm_template.sh"
+    [cellranger-mkfastq]="slurm_templates/cellranger_mkfastq_slurm_template.sh"
     [spaceranger]="slurm_templates/spaceranger_slurm_template.sh"
     [xeniumranger]="slurm_templates/xeniumranger_slurm_template.sh"
 )
 
 # Ordered list of known pipelines (bash 3 compat for iteration)
-KNOWN_PIPELINES=(addone bulkrnaseq psoma cellranger spaceranger xeniumranger)
+KNOWN_PIPELINES=(addone bulkrnaseq psoma cellranger cellranger-mkfastq spaceranger xeniumranger)
 
 # ── Color output ─────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
