@@ -1,0 +1,9 @@
+sample_id: UTDGC589-2
+sample_name: 589-2
+fastq_dir: /home/maw210003/scratch/UTDGC589/fastq
+transcriptome: /groups/tprice/pipelines/references/refdata-gex-GRCh38-2024-A
+localcores: 16
+localmem: 64
+create_bam: true
+chemistry: threeprime
+scratch_output_dir: /home/maw210003/scratch/UTDGC589/cellranger
